@@ -63,15 +63,18 @@ CORES=${CORES:-2}
 read -p "RAM in MB [2048]: " RAM </dev/tty
 RAM=${RAM:-2048}
 
-# --- SELEZIONE DINAMICA STORAGE ---
-echo -e "\n${YELLOW}Storage disponibili sul nodo (che supportano container):${NC}"
-# Mostra la tabella degli storage filtrando solo quelli validi per 'rootdir'
-pvesm status -content rootdir | awk 'NR==1 {print "\033[1;36m" $0 "\033[0m"} NR>1 {print $0}'
+# --- SELEZIONE DINAMICA STORAGE (CORRETTA) ---
+echo -e "\n${YELLOW}Storage disponibili e attivi sul nodo:${NC}"
+# Mostra tutti gli storage che risultano "active"
+pvesm status | awk 'NR==1 {print "\033[1;36m" $0 "\033[0m"} NR>1 && $3=="active" {print $0}'
 
-# Cerca un default intelligente: preferisce local-lvm o local-zfs, altrimenti prende il primo della lista
-DEFAULT_STORAGE=$(pvesm status -content rootdir | awk 'NR>1 {print $1}' | grep -m 1 -E 'local-lvm|local-zfs' || true)
+# Trova tutti i nomi degli storage attivi
+STORAGE_ATTIVI=$(pvesm status | awk 'NR>1 && $3=="active" {print $1}')
+
+# Cerca prima local-lvm o local-zfs, altrimenti prende il primo della lista
+DEFAULT_STORAGE=$(echo "$STORAGE_ATTIVI" | grep -m 1 -E '^local-lvm$|^local-zfs$' || true)
 if [ -z "$DEFAULT_STORAGE" ]; then
-  DEFAULT_STORAGE=$(pvesm status -content rootdir | awk 'NR==2 {print $1}')
+  DEFAULT_STORAGE=$(echo "$STORAGE_ATTIVI" | head -n 1)
 fi
 
 echo -e ""
@@ -118,6 +121,6 @@ if [[ "$START_CT" =~ ^[Yy]$ ]]; then
     echo -e "IP (DHCP): ${CYAN}$IP_ADDRESS${NC}"
     echo -e "Collegamento: ${CYAN}ssh docker@$IP_ADDRESS${NC}"
   else
-    echo -e "${YELLOW}IP non rilevato, controlla la console di Proxmox.${NC}"
+    echo -e "${YELLOW}IP non rilevato in automatico, controlla la console di Proxmox.${NC}"
   fi
 fi
