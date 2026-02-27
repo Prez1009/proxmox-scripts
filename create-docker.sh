@@ -17,7 +17,7 @@ fi
 
 if ! command -v dab &> /dev/null; then
   echo -e "${YELLOW}Il tool 'dab' (Debian Appliance Builder) non è installato. Lo installo...${NC}"
-  apt-get update && apt-get install -y dab make
+  apt-get update >/dev/null && apt-get install -y dab make
 fi
 
 # --- FASE 1: GENERAZIONE DEL TEMPLATE ---
@@ -25,13 +25,13 @@ TEMPLATE_FILE=$(ls /var/lib/vz/template/cache/debian-12-docker-template*.tar.gz 
 
 if [ -z "$TEMPLATE_FILE" ]; then
   echo -e "${YELLOW}Template non trovato. Inizio la build del template con DAB...${NC}"
-  echo -e "Questa operazione richiederà alcuni minuti (scaricamento OS e installazione Docker)."
+  echo -e "Questa operazione richiederà alcuni minuti."
   
   BUILD_DIR=$(mktemp -d)
   cd "$BUILD_DIR"
 
-  wget -q https://github.com/Prez1009/proxmox-dab-templates/tree/main/debian-docker/Makefile -O Makefile
-  wget -q https://github.com/Prez1009/proxmox-dab-templates/tree/main/debian-docker/dab.conf -O dab.conf
+  wget -q https://raw.githubusercontent.com/Prez1009/proxmox-dab-templates/main/debian-docker/Makefile -O Makefile
+  wget -q https://raw.githubusercontent.com/Prez1009/proxmox-dab-templates/main/debian-docker/dab.conf -O dab.conf
 
   make
 
@@ -63,19 +63,11 @@ CORES=${CORES:-2}
 read -p "RAM in MB [2048]: " RAM </dev/tty
 RAM=${RAM:-2048}
 
-# --- SELEZIONE DINAMICA STORAGE (CORRETTA) ---
 echo -e "\n${YELLOW}Storage disponibili e attivi sul nodo:${NC}"
-# Mostra tutti gli storage che risultano "active"
 pvesm status | awk 'NR==1 {print "\033[1;36m" $0 "\033[0m"} NR>1 && $3=="active" {print $0}'
-
-# Trova tutti i nomi degli storage attivi
 STORAGE_ATTIVI=$(pvesm status | awk 'NR>1 && $3=="active" {print $1}')
-
-# Cerca prima local-lvm o local-zfs, altrimenti prende il primo della lista
 DEFAULT_STORAGE=$(echo "$STORAGE_ATTIVI" | grep -m 1 -E '^local-lvm$|^local-zfs$' || true)
-if [ -z "$DEFAULT_STORAGE" ]; then
-  DEFAULT_STORAGE=$(echo "$STORAGE_ATTIVI" | head -n 1)
-fi
+[ -z "$DEFAULT_STORAGE" ] && DEFAULT_STORAGE=$(echo "$STORAGE_ATTIVI" | head -n 1)
 
 echo -e ""
 read -p "Storage di destinazione [$DEFAULT_STORAGE]: " STORAGE </dev/tty
@@ -84,15 +76,12 @@ STORAGE=${STORAGE:-$DEFAULT_STORAGE}
 read -p "Spazio Disco in GB [100]: " DISK_SIZE </dev/tty
 DISK_SIZE=${DISK_SIZE:-100}
 
-# --- CREAZIONE EFFETTIVA ---
-echo -e "\n${CYAN}-------------------------------------------------------${NC}"
-echo -e "Riepilogo:"
-echo -e "ID:      ${GREEN}$CTID${NC} | Host: ${GREEN}$HOSTNAME${NC}"
-echo -e "Risorse: ${GREEN}$CORES Core, $RAM MB RAM${NC}"
-echo -e "Disco:   ${GREEN}$DISK_SIZE GB su storage '$STORAGE'${NC}"
-echo -e "${CYAN}-------------------------------------------------------${NC}"
+# --- FASE 3: CHIEDE DI INCOLLARE LA CHIAVE PUBBLICA ---
+echo -e ""
+echo -e "${YELLOW}Per abilitare l'accesso SSH all'utente 'docker', incolla la tua chiave pubblica.${NC}"
+read -p "Chiave SSH pubblica (es: ssh-ed25519 AAAA... user@host): " SSH_PUBLIC_KEY </dev/tty
 
-echo -e "${YELLOW}Creazione del container in corso...${NC}"
+echo -e "\n${CYAN}Creazione del container in corso...${NC}"
 pct create "$CTID" "$TEMPLATE_PATH" \
   --ostype debian \
   --hostname "$HOSTNAME" \
@@ -113,7 +102,17 @@ START_CT=${START_CT:-Y}
 if [[ "$START_CT" =~ ^[Yy]$ ]]; then
   echo -e "${YELLOW}Avvio del container...${NC}"
   pct start "$CTID"
-  sleep 4
+  sleep 5
+
+  # --- FASE 4: CONFIGURA LA CHIAVE SSH SE È STATA INCOLLATA ---
+  if [ -n "$SSH_PUBLIC_KEY" ]; then
+    echo -e "${YELLOW}Configurazione della chiave SSH inserita...${NC}"
+    pct exec $CTID -- bash -c "mkdir -p /home/docker/.ssh && chmod 700 /home/docker/.ssh"
+    pct exec $CTID -- bash -c "echo '$SSH_PUBLIC_KEY' > /home/docker/.ssh/authorized_keys"
+    pct exec $CTID -- bash -c "chmod 600 /home/docker/.ssh/authorized_keys && chown -R docker:docker /home/docker/.ssh"
+    echo -e "${GREEN}Chiave SSH configurata con successo!${NC}"
+  fi
+  
   IP_ADDRESS=$(pct exec "$CTID" -- ip -4 addr show eth0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || true)
   
   echo -e "${GREEN}Container avviato!${NC}"
