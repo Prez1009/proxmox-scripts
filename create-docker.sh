@@ -27,18 +27,14 @@ if [ -z "$TEMPLATE_FILE" ]; then
   echo -e "${YELLOW}Template non trovato. Inizio la build del template con DAB...${NC}"
   echo -e "Questa operazione richiederà alcuni minuti (scaricamento OS e installazione Docker)."
   
-  # Crea cartella temporanea per la build
   BUILD_DIR=$(mktemp -d)
   cd "$BUILD_DIR"
 
-  # SCARICA I TUOI FILE DA GITHUB (Sostituisci gli URL con i tuoi Raw link!)
   wget -q https://github.com/Prez1009/proxmox-dab-templates/tree/main/debian-docker/Makefile -O Makefile
   wget -q https://github.com/Prez1009/proxmox-dab-templates/tree/main/debian-docker/dab.conf -O dab.conf
 
-  # Avvia il tuo makefile
   make
 
-  # Esci e pulisci
   cd /
   rm -rf "$BUILD_DIR"
   
@@ -61,17 +57,37 @@ CTID=${CTID:-$NEXT_ID}
 read -p "Hostname [docker-node-$CTID]: " HOSTNAME </dev/tty
 HOSTNAME=${HOSTNAME:-docker-node-$CTID}
 
-read -p "Spazio Disco in GB [100]: " DISK_SIZE </dev/tty
-DISK_SIZE=${DISK_SIZE:-100}
-
-read -p "Storage di destinazione [local-lvm]: " STORAGE </dev/tty
-STORAGE=${STORAGE:-local-lvm}
-
 read -p "Cores CPU [2]: " CORES </dev/tty
 CORES=${CORES:-2}
 
 read -p "RAM in MB [2048]: " RAM </dev/tty
 RAM=${RAM:-2048}
+
+# --- SELEZIONE DINAMICA STORAGE ---
+echo -e "\n${YELLOW}Storage disponibili sul nodo (che supportano container):${NC}"
+# Mostra la tabella degli storage filtrando solo quelli validi per 'rootdir'
+pvesm status -content rootdir | awk 'NR==1 {print "\033[1;36m" $0 "\033[0m"} NR>1 {print $0}'
+
+# Cerca un default intelligente: preferisce local-lvm o local-zfs, altrimenti prende il primo della lista
+DEFAULT_STORAGE=$(pvesm status -content rootdir | awk 'NR>1 {print $1}' | grep -m 1 -E 'local-lvm|local-zfs' || true)
+if [ -z "$DEFAULT_STORAGE" ]; then
+  DEFAULT_STORAGE=$(pvesm status -content rootdir | awk 'NR==2 {print $1}')
+fi
+
+echo -e ""
+read -p "Storage di destinazione [$DEFAULT_STORAGE]: " STORAGE </dev/tty
+STORAGE=${STORAGE:-$DEFAULT_STORAGE}
+
+read -p "Spazio Disco in GB [100]: " DISK_SIZE </dev/tty
+DISK_SIZE=${DISK_SIZE:-100}
+
+# --- CREAZIONE EFFETTIVA ---
+echo -e "\n${CYAN}-------------------------------------------------------${NC}"
+echo -e "Riepilogo:"
+echo -e "ID:      ${GREEN}$CTID${NC} | Host: ${GREEN}$HOSTNAME${NC}"
+echo -e "Risorse: ${GREEN}$CORES Core, $RAM MB RAM${NC}"
+echo -e "Disco:   ${GREEN}$DISK_SIZE GB su storage '$STORAGE'${NC}"
+echo -e "${CYAN}-------------------------------------------------------${NC}"
 
 echo -e "${YELLOW}Creazione del container in corso...${NC}"
 pct create "$CTID" "$TEMPLATE_PATH" \
@@ -92,12 +108,16 @@ read -p "Vuoi avviare il container ora? (Y/n): " START_CT </dev/tty
 START_CT=${START_CT:-Y}
 
 if [[ "$START_CT" =~ ^[Yy]$ ]]; then
+  echo -e "${YELLOW}Avvio del container...${NC}"
   pct start "$CTID"
   sleep 4
   IP_ADDRESS=$(pct exec "$CTID" -- ip -4 addr show eth0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || true)
   
   echo -e "${GREEN}Container avviato!${NC}"
   if [ -n "$IP_ADDRESS" ]; then
-    echo -e "IP: ${CYAN}$IP_ADDRESS${NC} - SSH: ${CYAN}ssh docker@$IP_ADDRESS${NC}"
+    echo -e "IP (DHCP): ${CYAN}$IP_ADDRESS${NC}"
+    echo -e "Collegamento: ${CYAN}ssh docker@$IP_ADDRESS${NC}"
+  else
+    echo -e "${YELLOW}IP non rilevato, controlla la console di Proxmox.${NC}"
   fi
 fi
