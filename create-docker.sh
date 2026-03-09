@@ -81,6 +81,26 @@ echo -e ""
 echo -e "${YELLOW}Per abilitare l'accesso SSH all'utente 'docker', incolla la tua chiave pubblica.${NC}"
 read -p "Chiave SSH pubblica (es: ssh-ed25519 AAAA... user@host): " SSH_PUBLIC_KEY </dev/tty
 
+# --- FASE 3b: CHIEDE LA PASSWORD DI ROOT ---
+echo -e ""
+echo -e "${YELLOW}Imposta la password per l'utente root del container.${NC}"
+while true; do
+  read -s -p "Password root: " ROOT_PASSWORD </dev/tty
+  echo ""
+  read -s -p "Conferma password root: " ROOT_PASSWORD_CONFIRM </dev/tty
+  echo ""
+  if [ "$ROOT_PASSWORD" = "$ROOT_PASSWORD_CONFIRM" ]; then
+    if [ -z "$ROOT_PASSWORD" ]; then
+      echo -e "${RED}Errore: la password non può essere vuota. Riprova.${NC}"
+    else
+      echo -e "${GREEN}Password confermata.${NC}"
+      break
+    fi
+  else
+    echo -e "${RED}Errore: le password non coincidono. Riprova.${NC}"
+  fi
+done
+
 echo -e "\n${CYAN}Creazione del container in corso...${NC}"
 pct create "$CTID" "$TEMPLATE_PATH" \
   --ostype debian \
@@ -104,7 +124,12 @@ if [[ "$START_CT" =~ ^[Yy]$ ]]; then
   pct start "$CTID"
   sleep 5
 
-  # --- FASE 4: CONFIGURA LA CHIAVE SSH SE È STATA INCOLLATA ---
+  # --- FASE 4: IMPOSTA LA PASSWORD ROOT ---
+  echo -e "${YELLOW}Impostazione della password root...${NC}"
+  pct exec "$CTID" -- bash -c "echo 'root:${ROOT_PASSWORD}' | chpasswd"
+  echo -e "${GREEN}Password root impostata con successo!${NC}"
+
+  # --- FASE 5: CONFIGURA LA CHIAVE SSH SE È STATA INCOLLATA ---
   if [ -n "$SSH_PUBLIC_KEY" ]; then
     echo -e "${YELLOW}Configurazione della chiave SSH inserita...${NC}"
     pct exec $CTID -- bash -c "mkdir -p /home/docker/.ssh && chmod 700 /home/docker/.ssh"
