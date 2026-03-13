@@ -76,6 +76,33 @@ STORAGE=${STORAGE:-$DEFAULT_STORAGE}
 read -p "Spazio Disco in GB [100]: " DISK_SIZE </dev/tty
 DISK_SIZE=${DISK_SIZE:-100}
 
+# --- FASE 2b: CONFIGURAZIONE RETE ---
+echo -e "\n${CYAN}--- Configurazione Rete ---${NC}"
+echo -e "  1) DHCP (automatico)"
+echo -e "  2) IP Statico"
+read -p "Scegli modalità rete [1]: " NET_MODE </dev/tty
+NET_MODE=${NET_MODE:-1}
+
+if [ "$NET_MODE" = "2" ]; then
+  read -p "Indirizzo IP con CIDR (es: 192.168.1.100/24): " STATIC_IP </dev/tty
+  while [ -z "$STATIC_IP" ]; do
+    echo -e "${RED}Errore: l'indirizzo IP non può essere vuoto.${NC}"
+    read -p "Indirizzo IP con CIDR (es: 192.168.1.100/24): " STATIC_IP </dev/tty
+  done
+
+  read -p "Gateway (es: 192.168.1.1): " STATIC_GW </dev/tty
+  while [ -z "$STATIC_GW" ]; do
+    echo -e "${RED}Errore: il gateway non può essere vuoto.${NC}"
+    read -p "Gateway (es: 192.168.1.1): " STATIC_GW </dev/tty
+  done
+
+  NET_CONFIG="name=eth0,bridge=vmbr0,ip=${STATIC_IP},gw=${STATIC_GW}"
+  echo -e "${GREEN}Rete statica configurata: IP=${STATIC_IP} GW=${STATIC_GW}${NC}"
+else
+  NET_CONFIG="name=eth0,bridge=vmbr0,ip=dhcp"
+  echo -e "${GREEN}Rete configurata in DHCP.${NC}"
+fi
+
 # --- FASE 3: CHIEDE DI INCOLLARE LA CHIAVE PUBBLICA ---
 echo -e ""
 echo -e "${YELLOW}Per abilitare l'accesso SSH all'utente 'docker', incolla la tua chiave pubblica.${NC}"
@@ -109,7 +136,7 @@ pct create "$CTID" "$TEMPLATE_PATH" \
   --memory "$RAM" \
   --swap "$RAM" \
   --rootfs "$STORAGE:$DISK_SIZE" \
-  --net0 name=eth0,bridge=vmbr0,ip=dhcp \
+  --net0 "$NET_CONFIG" \
   --unprivileged 1 \
   --features nesting=1,keyctl=1 \
   --onboot 1
@@ -137,8 +164,18 @@ if [[ "$START_CT" =~ ^[Yy]$ ]]; then
     pct exec $CTID -- bash -c "chmod 600 /home/docker/.ssh/authorized_keys && chown -R docker:docker /home/docker/.ssh"
     echo -e "${GREEN}Chiave SSH configurata con successo!${NC}"
   fi
-  
-  IP_ADDRESS=$(pct exec "$CTID" -- ip -4 addr show eth0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || true)
+
+  # --- FASE 6: AGGIUNGI DOCKER AL GRUPPO SUDO ---
+  echo -e "${YELLOW}Aggiunta dell'utente docker al gruppo sudo...${NC}"
+  pct exec "$CTID" -- bash -c "usermod -aG sudo docker"
+  pct exec "$CTID" -- bash -c "echo 'docker ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/docker && chmod 440 /etc/sudoers.d/docker"
+  echo -e "${GREEN}Utente docker aggiunto a sudo con NOPASSWD!${NC}"
+
+  if [ "$NET_MODE" = "2" ]; then
+    IP_ADDRESS=$(echo "$STATIC_IP" | cut -d'/' -f1)
+  else
+    IP_ADDRESS=$(pct exec "$CTID" -- ip -4 addr show eth0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || true)
+  fi
   
   echo -e "${GREEN}Container avviato!${NC}"
   if [ -n "$IP_ADDRESS" ]; then
